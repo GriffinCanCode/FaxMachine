@@ -1144,6 +1144,10 @@ def interactive_file_browser():
     if ncurses_available:
         return _curses_file_browser(in_db=in_database, shortcuts=shortcuts)
     
+    # For simple browser: add select multiple mode
+    selected_files = []
+    select_multiple_mode = False
+    
     while True:
         # Clear screen
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -1160,6 +1164,10 @@ def interactive_file_browser():
         else:
             print("Mode: System Browser")
             print(f"Current directory: {current_path}")
+        
+        # Show selection mode status
+        if select_multiple_mode:
+            print_colored(f"MULTI-SELECT MODE: {len(selected_files)} files selected", Colors.GREEN + Colors.BOLD)
         
         # Get items in current directory
         try:
@@ -1205,14 +1213,21 @@ def interactive_file_browser():
             ext = ext.lower()[1:] if ext else ""
             ext_str = f"[{ext}]" if ext else ""
             
+            # Determine if this file is selected in multi-select mode
+            selected_marker = ""
+            if select_multiple_mode:
+                file_path = os.path.join(current_path, f)
+                if file_path in selected_files:
+                    selected_marker = Colors.GREEN + " [✓] " + Colors.ENDC
+            
             # Show metadata if in DB mode
             if in_database:
                 rel_path = os.path.relpath(os.path.join(current_path, f), DB_DIR)
                 metadata = load_metadata(rel_path)
                 desc = f" - {metadata.get('description')}" if metadata.get('description') else ""
-                print(f"  {i+len(dirs)+1}. {f} {ext_str} ({size_str}){desc}")
+                print(f"  {i+len(dirs)+1}. {selected_marker}{f} {ext_str} ({size_str}){desc}")
             else:
-                print(f"  {i+len(dirs)+1}. {f} {ext_str} ({size_str})")
+                print(f"  {i+len(dirs)+1}. {selected_marker}{f} {ext_str} ({size_str})")
         
         # Navigation options
         print_colored("\nNavigation:", Colors.BOLD)
@@ -1228,8 +1243,13 @@ def interactive_file_browser():
         
         # Additional actions
         print_colored("\nActions:", Colors.BOLD)
+        if select_multiple_mode:
+            print("  space. Toggle selection of a file (with number)")
+            print("  a. Process all selected files")
+            print("  c. Clear all selections")
         print("  m. Mass add files to Faxmachine")
         print("  t. Toggle between system files and database")
+        print("  *. Toggle multi-select mode")
         print("  q. Quit browser")
         
         choice = input("\nEnter choice (number for file/directory): ")
@@ -1258,6 +1278,70 @@ def interactive_file_browser():
                 in_database = True
                 current_path = DB_DIR
             history = []
+            # Clear selections when switching modes
+            selected_files = []
+        elif choice == '*':
+            # Toggle multi-select mode
+            select_multiple_mode = not select_multiple_mode
+            if not select_multiple_mode:
+                selected_files = []  # Clear selections when exiting mode
+        elif choice.startswith(' ') and select_multiple_mode:
+            # Toggle selection for a specific file
+            try:
+                file_num = int(choice.strip())
+                if len(dirs) < file_num <= len(dirs) + len(files):
+                    file_idx = file_num - len(dirs) - 1
+                    file_path = os.path.join(current_path, files[file_idx])
+                    if file_path in selected_files:
+                        selected_files.remove(file_path)
+                    else:
+                        selected_files.append(file_path)
+                else:
+                    print_colored("Invalid file number", Colors.RED)
+                    input("\nPress Enter to continue...")
+            except ValueError:
+                print_colored("Invalid file number", Colors.RED)
+                input("\nPress Enter to continue...")
+        elif choice == 'a' and select_multiple_mode and selected_files:
+            # Process all selected files
+            if len(selected_files) > 0:
+                print_colored(f"\nProcessing {len(selected_files)} selected files", Colors.BOLD)
+                if in_database:
+                    # Actions for database files
+                    print("1. View all selected files")
+                    print("2. Inject all selected files to current directory")
+                    action = input("\nSelect action: ")
+                    
+                    if action == '1':
+                        for file_path in selected_files:
+                            vim_view_with_preview(file_path)
+                    elif action == '2':
+                        for file_path in selected_files:
+                            inject_file(file_path)
+                else:
+                    # Actions for system files
+                    print("1. Add all selected files to Faxmachine")
+                    print("2. View all selected files")
+                    action = input("\nSelect action: ")
+                    
+                    if action == '1':
+                        # Mass add all selected files
+                        category = input("Enter category for all files: ")
+                        if not category:
+                            print_colored("Category required for adding files", Colors.RED)
+                        else:
+                            for file_path in selected_files:
+                                add_file(file_path, category)
+                    elif action == '2':
+                        for file_path in selected_files:
+                            vim_view_with_preview(file_path)
+                
+                # Clear selections after processing
+                selected_files = []
+                input("\nPress Enter to continue...")
+        elif choice == 'c' and select_multiple_mode:
+            # Clear all selections
+            selected_files = []
         elif choice == 'm':
             # Mass add files
             if in_database:
@@ -1394,6 +1478,14 @@ def interactive_file_browser():
                     file_idx = idx - len(dirs)
                     file_path = os.path.join(current_path, files[file_idx])
                     
+                    # If in multi-select mode, toggle selection
+                    if select_multiple_mode:
+                        if file_path in selected_files:
+                            selected_files.remove(file_path)
+                        else:
+                            selected_files.append(file_path)
+                        continue
+                    
                     # Generate quick summary before asking for action
                     try:
                         summary, _, _, _ = smart_preview_file(file_path)
@@ -1434,7 +1526,7 @@ def _curses_file_browser(in_db=False, shortcuts=None):
     try:
         import curses
         
-        def draw_menu(stdscr, current_path, items, cursor_pos, starting_row=0, shortcuts=None, in_db=False):
+        def draw_menu(stdscr, current_path, items, cursor_pos, starting_row=0, shortcuts=None, in_db=False, selected_files=None, select_multiple_mode=False):
             height, width = stdscr.getmaxyx()
             
             # Clear screen
@@ -1444,10 +1536,16 @@ def _curses_file_browser(in_db=False, shortcuts=None):
             stdscr.addstr(0, 0, "Smart Document Browser", curses.A_BOLD)
             mode_text = "Database Browser" if in_db else "System Browser"
             stdscr.addstr(1, 0, f"Mode: {mode_text} | Path: {current_path}", curses.A_NORMAL)
-            stdscr.addstr(2, 0, "=" * (width - 1), curses.A_NORMAL)
+            
+            # Show multi-select mode status if active
+            if select_multiple_mode:
+                select_status = f"MULTI-SELECT: {len(selected_files)} files selected"
+                stdscr.addstr(2, 0, select_status, curses.A_BOLD)
+                
+            stdscr.addstr(3, 0, "=" * (width - 1), curses.A_NORMAL)
             
             # Draw shortcuts if available and in system mode
-            row = 3
+            row = 4
             if shortcuts and not in_db:
                 stdscr.addstr(row, 0, "Shortcuts:", curses.A_BOLD)
                 row += 1
@@ -1481,23 +1579,52 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                 # Format item
                 display_name = item_name + ("/" if is_dir else "")
                 
+                # Check if this file is selected in multi-select mode
+                is_selected = False
+                if select_multiple_mode and not is_dir:
+                    full_path = os.path.join(current_path, item_name)
+                    is_selected = full_path in selected_files
+                
+                # Selected item indicator
+                selected_prefix = "[✓] " if is_selected else "    "
+                
                 # Ensure display name isn't too long
-                if len(display_name) > width - 5:
-                    display_name = display_name[:width-8] + "..."
+                if len(display_name) > width - 10:  # Account for selection mark
+                    display_name = display_name[:width-13] + "..."
                 
                 # Highlight current selection
                 if i == cursor_pos:
-                    stdscr.addstr(row + i - start_idx, 0, f"> {display_name}", curses.A_REVERSE)
+                    # Current cursor position gets highlighted
+                    if is_selected:
+                        stdscr.addstr(row + i - start_idx, 0, f"> {selected_prefix}{display_name}", curses.A_REVERSE)
+                    else:
+                        stdscr.addstr(row + i - start_idx, 0, f"> {display_name}", curses.A_REVERSE)
                 else:
-                    stdscr.addstr(row + i - start_idx, 0, f"  {display_name}", curses.A_NORMAL)
+                    # Normal items
+                    if is_selected:
+                        stdscr.addstr(row + i - start_idx, 0, f"  {selected_prefix}{display_name}", curses.A_NORMAL)
+                    else:
+                        stdscr.addstr(row + i - start_idx, 0, f"  {display_name}", curses.A_NORMAL)
             
             # Draw footer
             footer_y = height - 3
             stdscr.addstr(footer_y, 0, "=" * (width - 1), curses.A_NORMAL)
-            keys = "j/k: Navigate | l: Open | h: Parent | q: Quit | v: View | a: Add"
-            if shortcuts and not in_db:
-                keys += " | #: Shortcuts"
-            stdscr.addstr(footer_y + 1, 0, keys, curses.A_BOLD)
+            
+            # Basic controls
+            basic_keys = "j/k: Navigate | l: Open | h: Parent | q: Quit | v: View"
+            
+            # Add multi-select controls
+            if select_multiple_mode:
+                multi_keys = "SPACE: Toggle selection | a: Process selected | m: Exit multi-select"
+                # Show basic controls on first line, multi-select controls on second line
+                stdscr.addstr(footer_y + 1, 0, basic_keys, curses.A_BOLD)
+                stdscr.addstr(footer_y + 2, 0, multi_keys, curses.A_BOLD)
+            else:
+                # Show expanded basic controls when not in multi-select mode
+                full_keys = basic_keys + " | *: Multi-select mode"
+                if shortcuts and not in_db:
+                    full_keys += " | #: Shortcuts"
+                stdscr.addstr(footer_y + 1, 0, full_keys, curses.A_BOLD)
             
             # Refresh screen
             stdscr.refresh()
@@ -1510,6 +1637,10 @@ def _curses_file_browser(in_db=False, shortcuts=None):
             current_path = DB_DIR if in_db else os.getcwd()
             history = []
             cursor_pos = 0
+            
+            # For multi-select mode
+            select_multiple_mode = False
+            selected_files = []
             
             while True:
                 # Get directory contents
@@ -1529,7 +1660,8 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                     cursor_pos = 0 if items else -1
                 
                 # Draw the menu
-                draw_menu(stdscr, current_path, items, cursor_pos, shortcuts=shortcuts, in_db=in_db)
+                draw_menu(stdscr, current_path, items, cursor_pos, shortcuts=shortcuts, in_db=in_db, 
+                          selected_files=selected_files, select_multiple_mode=select_multiple_mode)
                 
                 # Get user input
                 key = stdscr.getch()
@@ -1540,6 +1672,72 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                     cursor_pos += 1
                 elif key == ord('k') and items and cursor_pos > 0:
                     cursor_pos -= 1
+                elif key == ord('*'):
+                    # Toggle multi-select mode
+                    select_multiple_mode = not select_multiple_mode
+                    if not select_multiple_mode:
+                        selected_files = []  # Clear selections when exiting mode
+                elif key == ord('m') and select_multiple_mode:
+                    # Exit multi-select mode
+                    select_multiple_mode = False
+                    selected_files = []
+                elif key == ord(' ') and items and cursor_pos >= 0:
+                    # Toggle selection for current item (only for files, not directories)
+                    item_name, is_dir = items[cursor_pos]
+                    
+                    if not is_dir:  # Only select files, not directories
+                        full_path = os.path.join(current_path, item_name)
+                        
+                        if full_path in selected_files:
+                            selected_files.remove(full_path)
+                        else:
+                            selected_files.append(full_path)
+                            
+                        # Move cursor down after selection if possible
+                        if cursor_pos < len(items) - 1:
+                            cursor_pos += 1
+                elif key == ord('a') and select_multiple_mode and selected_files:
+                    # Process all selected files
+                    curses.endwin()  # Exit curses temporarily
+                    
+                    print_colored(f"\nProcessing {len(selected_files)} selected files", Colors.BOLD)
+                    if in_db:
+                        # Actions for database files
+                        print("1. View all selected files")
+                        print("2. Inject all selected files to current directory")
+                        action = input("\nSelect action: ")
+                        
+                        if action == '1':
+                            for file_path in selected_files:
+                                vim_view_with_preview(file_path)
+                        elif action == '2':
+                            for file_path in selected_files:
+                                inject_file(file_path)
+                    else:
+                        # Actions for system files
+                        print("1. Add all selected files to Faxmachine")
+                        print("2. View all selected files")
+                        action = input("\nSelect action: ")
+                        
+                        if action == '1':
+                            # Mass add all selected files
+                            category = input("Enter category for all files: ")
+                            if not category:
+                                print_colored("Category required for adding files", Colors.RED)
+                            else:
+                                for file_path in selected_files:
+                                    add_file(file_path, category)
+                        elif action == '2':
+                            for file_path in selected_files:
+                                vim_view_with_preview(file_path)
+                    
+                    # Clear selections after processing
+                    selected_files = []
+                    select_multiple_mode = False
+                    
+                    input("Press Enter to continue...")
+                    stdscr.clear()
+                    curses.curs_set(0)
                 elif key in [ord(str(i)) for i in range(1, 10)] and shortcuts and not in_db:
                     # Number keys 1-9 for shortcuts
                     shortcut_idx = int(chr(key)) - 1
@@ -1585,6 +1783,17 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                     
                     full_path = os.path.join(current_path, name)
                     
+                    # If in multi-select mode and this is a file, toggle selection instead of opening
+                    if select_multiple_mode and not is_dir:
+                        if full_path in selected_files:
+                            selected_files.remove(full_path)
+                        else:
+                            selected_files.append(full_path)
+                        # Move cursor down after selection if possible
+                        if cursor_pos < len(items) - 1:
+                            cursor_pos += 1
+                        continue
+                        
                     if is_dir:
                         try:
                             history.append(current_path)
@@ -1649,7 +1858,7 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                         # Restart curses
                         stdscr.clear()
                         curses.curs_set(0)
-                elif key == ord('a') and items and cursor_pos >= 0:
+                elif key == ord('a') and items and cursor_pos >= 0 and not select_multiple_mode:
                     # Add file to Faxmachine
                     selected = items[cursor_pos]
                     name, is_dir = selected
