@@ -1,0 +1,3 @@
+[console_scripts]
+qgit = qgits.cli:main
+qgit-makegpg = qgits.scripts.gpg_setup:main
