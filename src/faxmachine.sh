@@ -61,7 +61,8 @@ if [ $# -eq 0 ]; then
     echo -e "5. ${CYAN}List all files${NC}"
     echo -e "6. ${CYAN}Delete a file${NC}"
     echo -e "7. ${CYAN}Mass add files${NC}"
-    echo -e "8. ${CYAN}Show version${NC}"
+    echo -e "8. ${CYAN}File browser${NC} (with shortcuts & smart preview)"
+    echo -e "9. ${CYAN}Show version${NC}"
     echo -e "h. ${CYAN}Help${NC}"
     echo -e "q. ${CYAN}Quit${NC}"
     echo ""
@@ -184,7 +185,20 @@ if [ $# -eq 0 ]; then
             fi
             ;;
         7) python3 "$PYTHON_SCRIPT" mass-add ;;
-        8) python3 "$PYTHON_SCRIPT" --version ;;
+        8) 
+            read -p "Enter path to document (leave empty to browse files): " doc_path
+            
+            if [ -z "$doc_path" ]; then
+                # Launch interactive file browser
+                python3 "$PYTHON_SCRIPT" browser
+            elif [ ! -f "$doc_path" ]; then
+                echo -e "${RED}File not found: $doc_path${NC}"
+                exit 1
+            else
+                python3 "$PYTHON_SCRIPT" browser "$doc_path" 
+            fi
+            ;;
+        9) python3 "$PYTHON_SCRIPT" --version ;;
         h) python3 "$PYTHON_SCRIPT" --detailed-help ;;
         q) exit 0 ;;
         *) 
