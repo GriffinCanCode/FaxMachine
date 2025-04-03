@@ -18,6 +18,7 @@ import re
 from datetime import datetime
 import csv
 import importlib.util
+import textwrap
 
 # Constants
 VERSION = "1.1.0"
@@ -36,6 +37,11 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+    BG_GREEN = '\033[42m'  # Green background
+    BG_BLUE = '\033[44m'   # Blue background
+    BG_YELLOW = '\033[43m' # Yellow background
+    BG_GREY = '\033[47m'   # Grey background
+    BLACK = '\033[30m'     # Black text
 
 def print_colored(text, color):
     """Print text with color"""
@@ -1148,6 +1154,9 @@ def interactive_file_browser():
     selected_files = []
     select_multiple_mode = False
     
+    # For dropdown summaries
+    expanded_file_idx = None
+    
     while True:
         # Clear screen
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -1167,8 +1176,12 @@ def interactive_file_browser():
         
         # Show selection mode status
         if select_multiple_mode:
-            print_colored(f"MULTI-SELECT MODE: {len(selected_files)} files selected", Colors.GREEN + Colors.BOLD)
-        
+            multiselect_header = f"MULTI-SELECT MODE: {len(selected_files)} files selected"
+            print_colored("=" * len(multiselect_header), Colors.BG_BLUE + Colors.BOLD)
+            print_colored(multiselect_header, Colors.BG_BLUE + Colors.BOLD + Colors.BLACK)
+            print_colored("=" * len(multiselect_header), Colors.BG_BLUE + Colors.BOLD)
+            print_colored("Select files using their numbers. Press 'a' to process selected files.", Colors.BLUE)
+            
         # Get items in current directory
         try:
             items = os.listdir(current_path)
@@ -1218,16 +1231,59 @@ def interactive_file_browser():
             if select_multiple_mode:
                 file_path = os.path.join(current_path, f)
                 if file_path in selected_files:
-                    selected_marker = Colors.GREEN + " [✓] " + Colors.ENDC
+                    selected_marker = Colors.BG_GREEN + Colors.BLACK + " [✓] " + Colors.ENDC
+            
+            # Get display index for file
+            file_idx = i + len(dirs) + 1
             
             # Show metadata if in DB mode
             if in_database:
                 rel_path = os.path.relpath(os.path.join(current_path, f), DB_DIR)
                 metadata = load_metadata(rel_path)
                 desc = f" - {metadata.get('description')}" if metadata.get('description') else ""
-                print(f"  {i+len(dirs)+1}. {selected_marker}{f} {ext_str} ({size_str}){desc}")
+                print(f"  {file_idx}. {selected_marker}{f} {ext_str} ({size_str}){desc}")
             else:
-                print(f"  {i+len(dirs)+1}. {selected_marker}{f} {ext_str} ({size_str})")
+                print(f"  {file_idx}. {selected_marker}{f} {ext_str} ({size_str})")
+                
+            # If this is the expanded file, show its summary underneath
+            if expanded_file_idx is not None and file_idx == expanded_file_idx:
+                file_path = os.path.join(current_path, f)
+                try:
+                    # Get a summary for the file
+                    summary, tags, preview, error = smart_preview_file(file_path)
+                    
+                    # Create a box for the summary
+                    width = min(os.get_terminal_size().columns - 5, 100)
+                    print(Colors.BLUE + "  ┌" + "─" * (width - 4) + "┐" + Colors.ENDC)
+                    
+                    # Show summary
+                    if summary:
+                        summary_lines = textwrap.wrap(summary, width - 6)
+                        for line in summary_lines:
+                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + Colors.BLUE + " │" + Colors.ENDC)
+                    
+                    # Show tags if available
+                    if tags and len(tags) > 0:
+                        tags_str = "Tags: " + ", ".join(tags)
+                        tags_lines = textwrap.wrap(tags_str, width - 6)
+                        for line in tags_lines:
+                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + Colors.BLUE + " │" + Colors.ENDC)
+                    
+                    # Show a snippet of content if available
+                    if preview:
+                        preview_lines = preview.split('\n')[:3]  # Show first 3 lines max
+                        print(Colors.BLUE + "  │ " + Colors.ENDC + "Preview:" + Colors.BLUE + " │" + Colors.ENDC)
+                        for line in preview_lines:
+                            if len(line) > width - 6:
+                                line = line[:width - 9] + "..."
+                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + Colors.BLUE + " │" + Colors.ENDC)
+                    
+                    # Close the box
+                    print(Colors.BLUE + "  └" + "─" * (width - 4) + "┘" + Colors.ENDC)
+                except Exception as e:
+                    print(Colors.BLUE + "  ┌" + "─" * 46 + "┐" + Colors.ENDC)
+                    print(Colors.BLUE + "  │ " + Colors.ENDC + f"Error generating preview: {str(e)}" + Colors.BLUE + " │" + Colors.ENDC)
+                    print(Colors.BLUE + "  └" + "─" * 46 + "┘" + Colors.ENDC)
         
         # Navigation options
         print_colored("\nNavigation:", Colors.BOLD)
@@ -1247,6 +1303,8 @@ def interactive_file_browser():
             print("  space. Toggle selection of a file (with number)")
             print("  a. Process all selected files")
             print("  c. Clear all selections")
+        else:
+            print("  d. Show/hide dropdown summary for a file (with number)")
         print("  m. Mass add files to Faxmachine")
         print("  t. Toggle between system files and database")
         print("  *. Toggle multi-select mode")
@@ -1280,11 +1338,49 @@ def interactive_file_browser():
             history = []
             # Clear selections when switching modes
             selected_files = []
-        elif choice == '*':
+            expanded_file_idx = None  # Reset expanded file
+        elif choice == '*' or choice == 'm' or choice == 'M':
             # Toggle multi-select mode
             select_multiple_mode = not select_multiple_mode
-            if not select_multiple_mode:
+            if select_multiple_mode:
+                expanded_file_idx = None  # Close any expanded summaries
+                print_colored("\n" + "=" * 40, Colors.BG_BLUE + Colors.BOLD)
+                print_colored(" MULTI-SELECT MODE ACTIVATED ", Colors.BG_BLUE + Colors.BOLD + Colors.BLACK)
+                print_colored("=" * 40, Colors.BG_BLUE + Colors.BOLD)
+                print_colored("• Use file numbers to select/deselect files", Colors.BLUE + Colors.BOLD)
+                print_colored("• Press 'a' to perform actions on selected files", Colors.BLUE + Colors.BOLD)
+                print_colored("• Press 'c' to clear all selections", Colors.BLUE + Colors.BOLD)
+                print_colored("• Press '*' or 'm' again to exit multi-select", Colors.BLUE + Colors.BOLD)
+                input("\nPress Enter to continue...")
+            else:
                 selected_files = []  # Clear selections when exiting mode
+                print_colored("\n" + "=" * 40, Colors.BG_YELLOW + Colors.BOLD)
+                print_colored(" MULTI-SELECT MODE DEACTIVATED ", Colors.BG_YELLOW + Colors.BOLD + Colors.BLACK)
+                print_colored("=" * 40, Colors.BG_YELLOW + Colors.BOLD)
+                input("Press Enter to continue...")
+        elif choice.lower().startswith('d') and not select_multiple_mode:
+            # Toggle dropdown summary for a file
+            try:
+                # Extract the file number from the input (e.g., "d5" or "d 5")
+                file_num_str = choice[1:].strip()
+                if file_num_str:
+                    file_num = int(file_num_str)
+                    # Check if valid file number
+                    if len(dirs) < file_num <= len(dirs) + len(files):
+                        # Toggle the dropdown
+                        if expanded_file_idx == file_num:
+                            expanded_file_idx = None  # Close dropdown
+                        else:
+                            expanded_file_idx = file_num  # Open dropdown
+                    else:
+                        print_colored("Invalid file number", Colors.RED)
+                        input("\nPress Enter to continue...")
+                else:
+                    print_colored("Please provide a file number with 'd', like 'd5'", Colors.YELLOW)
+                    input("\nPress Enter to continue...")
+            except ValueError:
+                print_colored("Invalid file number format", Colors.RED)
+                input("\nPress Enter to continue...")
         elif choice.startswith(' ') and select_multiple_mode:
             # Toggle selection for a specific file
             try:
@@ -1525,8 +1621,13 @@ def _curses_file_browser(in_db=False, shortcuts=None):
     """Interactive file browser using curses for better UI"""
     try:
         import curses
+        import textwrap
         
-        def draw_menu(stdscr, current_path, items, cursor_pos, starting_row=0, shortcuts=None, in_db=False, selected_files=None, select_multiple_mode=False):
+        # Track expanded file with dropdown summary
+        expanded_info = None  # (index, summary, tags, preview) or None
+        
+        def draw_menu(stdscr, current_path, items, cursor_pos, starting_row=0, shortcuts=None, in_db=False, 
+                      selected_files=None, select_multiple_mode=False, expanded_info=None):
             height, width = stdscr.getmaxyx()
             
             # Clear screen
@@ -1539,13 +1640,20 @@ def _curses_file_browser(in_db=False, shortcuts=None):
             
             # Show multi-select mode status if active
             if select_multiple_mode:
-                select_status = f"MULTI-SELECT: {len(selected_files)} files selected"
-                stdscr.addstr(2, 0, select_status, curses.A_BOLD)
+                select_status = f"MULTI-SELECT MODE: {len(selected_files)} files selected"
+                try:
+                    # Use background highlight colors if available
+                    stdscr.addstr(2, 0, select_status, curses.A_BOLD | curses.A_REVERSE)
+                    stdscr.addstr(3, 0, "Press SPACE to select/deselect | 'a' to process | 'm' to exit", curses.A_NORMAL)
+                except:
+                    # Fallback if attributes combination fails
+                    stdscr.addstr(2, 0, select_status, curses.A_BOLD)
+                    stdscr.addstr(3, 0, "Press SPACE to select/deselect | 'a' to process | 'm' to exit", curses.A_NORMAL)
                 
-            stdscr.addstr(3, 0, "=" * (width - 1), curses.A_NORMAL)
+            stdscr.addstr(4, 0, "=" * (width - 1), curses.A_NORMAL)
             
             # Draw shortcuts if available and in system mode
-            row = 4
+            row = 5
             if shortcuts and not in_db:
                 stdscr.addstr(row, 0, "Shortcuts:", curses.A_BOLD)
                 row += 1
@@ -1586,25 +1694,104 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                     is_selected = full_path in selected_files
                 
                 # Selected item indicator
-                selected_prefix = "[✓] " if is_selected else "    "
+                selected_prefix = "" if not is_selected else "✓ "
                 
                 # Ensure display name isn't too long
                 if len(display_name) > width - 10:  # Account for selection mark
                     display_name = display_name[:width-13] + "..."
                 
+                # Final display string with selection mark if needed
+                display_str = f"{selected_prefix}{display_name}"
+                
                 # Highlight current selection
                 if i == cursor_pos:
                     # Current cursor position gets highlighted
                     if is_selected:
-                        stdscr.addstr(row + i - start_idx, 0, f"> {selected_prefix}{display_name}", curses.A_REVERSE)
+                        try:
+                            stdscr.addstr(row + i - start_idx, 0, f"> {display_str}", curses.A_REVERSE | curses.A_BOLD)
+                        except:
+                            # Fallback if attribute combination fails
+                            stdscr.addstr(row + i - start_idx, 0, f"> {display_str}", curses.A_REVERSE)
                     else:
-                        stdscr.addstr(row + i - start_idx, 0, f"> {display_name}", curses.A_REVERSE)
+                        stdscr.addstr(row + i - start_idx, 0, f"> {display_str}", curses.A_REVERSE)
+                        
+                    # If this is the expanded item and not a directory, show its summary
+                    if expanded_info and expanded_info[0] == i and not is_dir:
+                        summary_row = row + i - start_idx + 1
+                        
+                        # Check if we have enough room to display summary
+                        available_rows = min(5, height - summary_row - 3)  # Leave some space for footer
+                        
+                        if available_rows > 0:
+                            # Draw summary box
+                            _, summary, tags, preview = expanded_info
+                            summary_width = min(width - 4, 80)
+                            
+                            # Draw top border
+                            if summary_row < height:
+                                try:
+                                    stdscr.addstr(summary_row, 2, "┌" + "─" * (summary_width - 2) + "┐", curses.A_NORMAL)
+                                except:
+                                    pass  # Skip if can't draw
+                            
+                            summary_row += 1
+                            rows_used = 1
+                            
+                            # Draw summary content
+                            if summary and summary_row < height and rows_used < available_rows:
+                                # Wrap summary text to fit box
+                                wrapped_summary = textwrap.wrap(summary, summary_width - 4)
+                                if wrapped_summary:
+                                    try:
+                                        stdscr.addstr(summary_row, 2, "│ " + wrapped_summary[0][:summary_width-6] + 
+                                                    " " * (summary_width - len(wrapped_summary[0]) - 6) + " │", curses.A_NORMAL)
+                                    except:
+                                        pass
+                                    summary_row += 1
+                                    rows_used += 1
+                            
+                            # Draw tags
+                            if tags and summary_row < height and rows_used < available_rows:
+                                tags_str = "Tags: " + ", ".join(tags[:5])
+                                if len(tags) > 5:
+                                    tags_str += "..."
+                                if len(tags_str) > summary_width - 6:
+                                    tags_str = tags_str[:summary_width-9] + "..."
+                                try:
+                                    stdscr.addstr(summary_row, 2, "│ " + tags_str + 
+                                                " " * (summary_width - len(tags_str) - 6) + " │", curses.A_NORMAL)
+                                except:
+                                    pass
+                                summary_row += 1
+                                rows_used += 1
+                            
+                            # Draw preview
+                            if preview and summary_row < height and rows_used < available_rows:
+                                preview_line = preview.split('\n')[0][:summary_width-12] + "..."
+                                try:
+                                    stdscr.addstr(summary_row, 2, "│ " + preview_line + 
+                                                " " * (summary_width - len(preview_line) - 6) + " │", curses.A_NORMAL)
+                                except:
+                                    pass
+                                summary_row += 1
+                                rows_used += 1
+                            
+                            # Draw bottom border
+                            if summary_row < height:
+                                try:
+                                    stdscr.addstr(summary_row, 2, "└" + "─" * (summary_width - 2) + "┘", curses.A_NORMAL)
+                                except:
+                                    pass
+                                summary_row += 1
                 else:
                     # Normal items
                     if is_selected:
-                        stdscr.addstr(row + i - start_idx, 0, f"  {selected_prefix}{display_name}", curses.A_NORMAL)
+                        try:
+                            stdscr.addstr(row + i - start_idx, 0, f"  {display_str}", curses.A_BOLD)
+                        except:
+                            stdscr.addstr(row + i - start_idx, 0, f"  {display_str}", curses.A_NORMAL)
                     else:
-                        stdscr.addstr(row + i - start_idx, 0, f"  {display_name}", curses.A_NORMAL)
+                        stdscr.addstr(row + i - start_idx, 0, f"  {display_str}", curses.A_NORMAL)
             
             # Draw footer
             footer_y = height - 3
@@ -1613,7 +1800,7 @@ def _curses_file_browser(in_db=False, shortcuts=None):
             # Basic controls
             basic_keys = "j/k: Navigate | l: Open | h: Parent | q: Quit | v: View"
             
-            # Add multi-select controls
+            # Add multi-select controls or dropdown controls
             if select_multiple_mode:
                 multi_keys = "SPACE: Toggle selection | a: Process selected | m: Exit multi-select"
                 # Show basic controls on first line, multi-select controls on second line
@@ -1621,7 +1808,7 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                 stdscr.addstr(footer_y + 2, 0, multi_keys, curses.A_BOLD)
             else:
                 # Show expanded basic controls when not in multi-select mode
-                full_keys = basic_keys + " | *: Multi-select mode"
+                full_keys = basic_keys + " | d: Toggle summary | *: Multi-select mode"
                 if shortcuts and not in_db:
                     full_keys += " | #: Shortcuts"
                 stdscr.addstr(footer_y + 1, 0, full_keys, curses.A_BOLD)
@@ -1642,6 +1829,9 @@ def _curses_file_browser(in_db=False, shortcuts=None):
             select_multiple_mode = False
             selected_files = []
             
+            # For expanded dropdowns
+            expanded_info = None
+            
             while True:
                 # Get directory contents
                 try:
@@ -1658,10 +1848,12 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                 # Reset cursor position when changing directories
                 if cursor_pos >= len(items):
                     cursor_pos = 0 if items else -1
+                    expanded_info = None  # Reset expanded state when directory changes
                 
                 # Draw the menu
                 draw_menu(stdscr, current_path, items, cursor_pos, shortcuts=shortcuts, in_db=in_db, 
-                          selected_files=selected_files, select_multiple_mode=select_multiple_mode)
+                          selected_files=selected_files, select_multiple_mode=select_multiple_mode,
+                          expanded_info=expanded_info)
                 
                 # Get user input
                 key = stdscr.getch()
@@ -1670,17 +1862,44 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                     break
                 elif key == ord('j') and items and cursor_pos < len(items) - 1:
                     cursor_pos += 1
+                    # Automatically close expanded info when moving
+                    expanded_info = None
                 elif key == ord('k') and items and cursor_pos > 0:
                     cursor_pos -= 1
-                elif key == ord('*'):
+                    # Automatically close expanded info when moving
+                    expanded_info = None
+                elif key == ord('d') and items and cursor_pos >= 0 and not select_multiple_mode:
+                    # Toggle dropdown info for current item - only for files
+                    item_name, is_dir = items[cursor_pos]
+                    
+                    if not is_dir:  # Only show dropdowns for files, not directories
+                        if expanded_info and expanded_info[0] == cursor_pos:
+                            # If already expanded, close it
+                            expanded_info = None
+                        else:
+                            # Get file info to show in dropdown
+                            full_path = os.path.join(current_path, item_name)
+                            try:
+                                summary, tags, preview, _ = smart_preview_file(full_path)
+                                expanded_info = (cursor_pos, summary, tags, preview)
+                            except Exception as e:
+                                # If error, still show dropdown with error message
+                                expanded_info = (cursor_pos, f"Error: {str(e)}", [], "")
+                elif key == ord('*') or key == ord('m') or key == ord('M'):
                     # Toggle multi-select mode
                     select_multiple_mode = not select_multiple_mode
+                    if select_multiple_mode:
+                        expanded_info = None  # Close any expanded summaries
                     if not select_multiple_mode:
                         selected_files = []  # Clear selections when exiting mode
+                    # Force screen refresh to reflect the mode change
+                    stdscr.clear()
                 elif key == ord('m') and select_multiple_mode:
                     # Exit multi-select mode
                     select_multiple_mode = False
                     selected_files = []
+                    # Force screen refresh
+                    stdscr.clear()
                 elif key == ord(' ') and items and cursor_pos >= 0:
                     # Toggle selection for current item (only for files, not directories)
                     item_name, is_dir = items[cursor_pos]
