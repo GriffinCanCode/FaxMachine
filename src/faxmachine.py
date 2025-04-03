@@ -729,6 +729,149 @@ def process_search_command(args):
             return 1
         return 0
 
+def mass_add_files():
+    """Interactive mass file addition utility"""
+    print_header("Mass Add Files")
+    
+    # First, determine the destination category/subcategory
+    current_path = DB_DIR
+    breadcrumb = []
+    
+    print("First, select the destination category/subcategory:")
+    
+    while True:
+        # Get items in current directory
+        items = sorted([d for d in os.listdir(current_path) 
+                      if os.path.isdir(os.path.join(current_path, d))])
+        
+        # Show current location
+        if breadcrumb:
+            print(f"Current location: {' > '.join(breadcrumb)}")
+        else:
+            print("Current location: (root)")
+        
+        # Show directories
+        print_colored("\nAvailable categories:", Colors.BOLD)
+        for i, d in enumerate(items):
+            print(f"  {i+1}. {d}/")
+        
+        print("\n  n. Create new category")
+        if breadcrumb:
+            print("  u. Up one level")
+        print("  c. Confirm this location")
+        
+        choice = input("\nEnter your choice: ")
+        
+        if choice == 'c':
+            break
+        elif choice == 'u' and breadcrumb:
+            breadcrumb.pop()
+            current_path = DB_DIR
+            for b in breadcrumb:
+                current_path = os.path.join(current_path, b)
+        elif choice == 'n':
+            new_cat = input("Enter new category name: ")
+            if new_cat and not os.path.exists(os.path.join(current_path, new_cat)):
+                os.makedirs(os.path.join(current_path, new_cat), exist_ok=True)
+                breadcrumb.append(new_cat)
+                current_path = os.path.join(current_path, new_cat)
+            else:
+                print_colored("Invalid or existing category name", Colors.RED)
+                input("Press Enter to continue...")
+        else:
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(items):
+                    breadcrumb.append(items[idx])
+                    current_path = os.path.join(current_path, items[idx])
+                else:
+                    print_colored("Invalid choice", Colors.RED)
+                    input("Press Enter to continue...")
+            except ValueError:
+                print_colored("Invalid choice", Colors.RED)
+                input("Press Enter to continue...")
+    
+    # Now we have our destination path in current_path and breadcrumb
+    category = breadcrumb[0] if breadcrumb else None
+    subcategory = "/".join(breadcrumb[1:]) if len(breadcrumb) > 1 else None
+    
+    # Now let's select files to add
+    print_header("Select Files to Add")
+    print(f"Adding files to: {' > '.join(breadcrumb) if breadcrumb else 'root'}")
+    
+    # Use system file selection dialog if possible, otherwise fallback to manual input
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        
+        file_paths = filedialog.askopenfilenames(
+            title="Select files to add to Faxmachine",
+            multiple=True
+        )
+        
+        if not file_paths:
+            print_colored("No files selected", Colors.YELLOW)
+            return
+            
+        files_to_add = list(file_paths)
+        
+    except (ImportError, Exception):
+        # Fallback to manual input
+        print_colored("File selection dialog not available, using manual input", Colors.YELLOW)
+        files_to_add = []
+        
+        while True:
+            file_path = input("Enter path to file (or 'done' to finish): ")
+            if file_path.lower() == 'done':
+                break
+                
+            if os.path.exists(file_path):
+                files_to_add.append(file_path)
+            else:
+                print_colored(f"File not found: {file_path}", Colors.RED)
+    
+    if not files_to_add:
+        print_colored("No files to add", Colors.YELLOW)
+        return
+    
+    # Prompt for common metadata for all files
+    print_header(f"Adding {len(files_to_add)} Files")
+    
+    common_desc = input("Enter common description for all files (optional, press Enter to set individually): ")
+    common_tags = input("Enter common tags for all files (comma-separated, optional, press Enter to set individually): ")
+    common_tags_list = [t.strip() for t in common_tags.split(',')] if common_tags else None
+    
+    # Process each file
+    success_count = 0
+    
+    for i, file_path in enumerate(files_to_add):
+        print_colored(f"\nProcessing file {i+1}/{len(files_to_add)}: {os.path.basename(file_path)}", Colors.BOLD)
+        
+        # Ask for file-specific metadata if common metadata wasn't provided
+        desc = common_desc
+        tags_list = common_tags_list
+        
+        if desc is None or desc == "":
+            desc = input(f"Enter description for '{os.path.basename(file_path)}' (optional): ")
+        
+        if tags_list is None:
+            tags = input(f"Enter tags for '{os.path.basename(file_path)}' (comma-separated, optional): ")
+            tags_list = [t.strip() for t in tags.split(',')] if tags else None
+        
+        name = input(f"Enter name for '{os.path.basename(file_path)}' (leave blank for original): ")
+        if not name:
+            name = os.path.basename(file_path)
+        
+        # Add the file
+        if add_file(file_path, category, name, subcategory, desc, tags_list):
+            success_count += 1
+    
+    print_colored(f"\nAdded {success_count} out of {len(files_to_add)} files successfully", Colors.GREEN)
+    input("Press Enter to continue...")
+
 def display_help():
     """Display detailed help information"""
     print_header(f"Faxmachine v{VERSION} - Help")
@@ -740,6 +883,7 @@ def display_help():
     print("  show         Display a file's contents")
     print("  inject       Insert a file into current directory")
     print("  list         List all files by category")
+    print("  mass-add     Add multiple files at once")
     print("  recent       Show recently accessed files")
     print("  delete       Remove a file from the database")
     print("  init         Initialize or reset the database\n")
@@ -822,6 +966,9 @@ def main():
     # Recent command
     recent_parser = subparsers.add_parser('recent', help='Show recently accessed files')
     
+    # Mass add command
+    mass_add_parser = subparsers.add_parser('mass-add', help='Add multiple files at once')
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -866,6 +1013,9 @@ def main():
     elif args.command == 'delete':
         success = delete_file(args.file)
         return 0 if success else 1
+    elif args.command == 'mass-add':
+        mass_add_files()
+        return 0
     elif args.command == 'browse':
         interactive_browser()
     elif args.command == 'recent':
@@ -898,6 +1048,7 @@ def main():
         print("\nCOMMANDS:")
         print("  browse     Browse files interactively")
         print("  add        Add a file to the database")
+        print("  mass-add   Add multiple files at once")
         print("  search     Search for files")
         print("  inject     Insert a file into current directory")
         print("  list       List all files by category")

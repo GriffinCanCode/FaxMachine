@@ -60,7 +60,8 @@ if [ $# -eq 0 ]; then
     echo -e "4. ${CYAN}Show recent files${NC}"
     echo -e "5. ${CYAN}List all files${NC}"
     echo -e "6. ${CYAN}Delete a file${NC}"
-    echo -e "7. ${CYAN}Show version${NC}"
+    echo -e "7. ${CYAN}Mass add files${NC}"
+    echo -e "8. ${CYAN}Show version${NC}"
     echo -e "h. ${CYAN}Help${NC}"
     echo -e "q. ${CYAN}Quit${NC}"
     echo ""
@@ -182,7 +183,8 @@ if [ $# -eq 0 ]; then
                 exit 1
             fi
             ;;
-        7) python3 "$PYTHON_SCRIPT" --version ;;
+        7) python3 "$PYTHON_SCRIPT" mass-add ;;
+        8) python3 "$PYTHON_SCRIPT" --version ;;
         h) python3 "$PYTHON_SCRIPT" --detailed-help ;;
         q) exit 0 ;;
         *) 

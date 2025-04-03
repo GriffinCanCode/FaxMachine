@@ -10,6 +10,7 @@ Faxmachine is a powerful utility for storing, organizing, and injecting commonly
 - **File Preview**: See what you're getting before injecting files
 - **Metadata Support**: Add descriptions and tags to better organize your templates
 - **Category Organization**: Keep templates neatly arranged in categories and subcategories
+- **Built-in Templates**: Comes with pre-built templates for React, Python, Vue, Next.js, and FastAPI
 
 ## Installation
 
@@ -34,6 +35,11 @@ chmod +x /path/to/faxmachine/src/faxmachine.py
 4. Initialize the database:
 ```bash
 faxmachine init
+```
+
+5. (Optional) Add built-in templates to your faxmachine database:
+```bash
+./add_templates_to_faxmachine.sh
 ```
 
 ## Dependencies
@@ -90,6 +96,31 @@ faxmachine delete git/gitignore
 ## Database Structure
 
 Faxmachine stores your templates in `~/.faxmachine/db/` organized in categories. Metadata is stored in `~/.faxmachine/metadata/`.
+
+## Built-in Templates
+
+Faxmachine comes with pre-built templates for various frameworks and languages:
+
+- **React**: Component and custom hook templates
+- **Python**: SQLAlchemy models and Flask routes
+- **FastAPI**: Router templates
+- **Vue**: Component templates
+- **Next.js**: Page templates
+
+To use these templates:
+
+1. Add them to your faxmachine database:
+```bash
+./add_templates_to_faxmachine.sh
+```
+
+2. Browse and use them:
+```bash
+faxmachine search react
+faxmachine inject react/Component.tsx
+```
+
+For more information about the built-in templates, see the [templates/README.md](templates/README.md).
 
 ## Advanced Usage
 
