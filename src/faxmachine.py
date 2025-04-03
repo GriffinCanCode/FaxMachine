@@ -6,46 +6,41 @@ A utility for storing and injecting commonly used files and templates.
 
 import os
 import sys
-import shutil
+
+# Add the current directory to the Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import argparse
 import json
 from pathlib import Path
 import readline  # For better command line editing
+import curses
+import shutil
 import tempfile
-import difflib
-import subprocess
-import re
-from datetime import datetime
-import csv
 import importlib.util
+import re
+import csv
+import subprocess
+import fnmatch
+import random
+import string
+from datetime import datetime
+from collections import Counter
+import difflib
 import textwrap
+
+# Import database functions from db.py
+from db import (
+    DB_DIR, METADATA_DIR, CONFIG_DIR, 
+    init_db, get_metadata_path, save_metadata, load_metadata, 
+    list_items, add_file, find_file, delete_file, inject_file, show_file,
+    print_colored, Colors
+)
 
 # Constants
 VERSION = "1.1.0"
-CONFIG_DIR = os.path.expanduser("~/.faxmachine")
-DB_DIR = os.path.join(CONFIG_DIR, "db")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-METADATA_DIR = os.path.join(CONFIG_DIR, "metadata")
-
-# ANSI colors for terminal output
-class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-    BG_GREEN = '\033[42m'  # Green background
-    BG_BLUE = '\033[44m'   # Blue background
-    BG_YELLOW = '\033[43m' # Yellow background
-    BG_GREY = '\033[47m'   # Grey background
-    BLACK = '\033[30m'     # Black text
-
-def print_colored(text, color):
-    """Print text with color"""
-    print(f"{color}{text}{Colors.ENDC}")
+CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 
 def print_header(text):
     """Print a nicely formatted header"""
@@ -1260,30 +1255,34 @@ def interactive_file_browser():
                     if summary:
                         summary_lines = textwrap.wrap(summary, width - 6)
                         for line in summary_lines:
-                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + Colors.BLUE + " │" + Colors.ENDC)
+                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + " " * (width - 6 - len(line)) + Colors.BLUE + " │" + Colors.ENDC)
                     
                     # Show tags if available
                     if tags and len(tags) > 0:
                         tags_str = "Tags: " + ", ".join(tags)
                         tags_lines = textwrap.wrap(tags_str, width - 6)
                         for line in tags_lines:
-                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + Colors.BLUE + " │" + Colors.ENDC)
+                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + " " * (width - 6 - len(line)) + Colors.BLUE + " │" + Colors.ENDC)
                     
                     # Show a snippet of content if available
                     if preview:
+                        print(Colors.BLUE + "  │ " + Colors.ENDC + "Preview:" + " " * (width - 14) + Colors.BLUE + " │" + Colors.ENDC)
                         preview_lines = preview.split('\n')[:3]  # Show first 3 lines max
-                        print(Colors.BLUE + "  │ " + Colors.ENDC + "Preview:" + Colors.BLUE + " │" + Colors.ENDC)
                         for line in preview_lines:
                             if len(line) > width - 6:
                                 line = line[:width - 9] + "..."
-                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + Colors.BLUE + " │" + Colors.ENDC)
+                            print(Colors.BLUE + "  │ " + Colors.ENDC + line + " " * (width - 6 - len(line)) + Colors.BLUE + " │" + Colors.ENDC)
                     
                     # Close the box
                     print(Colors.BLUE + "  └" + "─" * (width - 4) + "┘" + Colors.ENDC)
+                    
+                    # Add extra line for spacing after the dropdown
+                    print("")
                 except Exception as e:
                     print(Colors.BLUE + "  ┌" + "─" * 46 + "┐" + Colors.ENDC)
-                    print(Colors.BLUE + "  │ " + Colors.ENDC + f"Error generating preview: {str(e)}" + Colors.BLUE + " │" + Colors.ENDC)
+                    print(Colors.BLUE + "  │ " + Colors.ENDC + f"Error generating preview: {str(e)}" + " " * (46 - len(f"Error generating preview: {str(e)}")) + Colors.BLUE + " │" + Colors.ENDC)
                     print(Colors.BLUE + "  └" + "─" * 46 + "┘" + Colors.ENDC)
+                    print("")
         
         # Navigation options
         print_colored("\nNavigation:", Colors.BOLD)
@@ -1676,8 +1675,22 @@ def _curses_file_browser(in_db=False, shortcuts=None):
             
             # Get visible range based on screen size
             visible_items = height - row - 5  # Account for header and footer
+            
+            # Initialize start_idx before using it
             start_idx = max(0, cursor_pos - visible_items // 2)
+            
+            # Check if we need to adjust visible range for expanded item
+            if expanded_info and expanded_info[0] >= start_idx and expanded_info[0] < start_idx + visible_items:
+                # Dropdown takes about 4-5 rows
+                visible_items -= 5
+                # Recalculate start_idx with adjusted visible_items
+                start_idx = max(0, cursor_pos - visible_items // 2)
+            
+            # Calculate end index for display
             end_idx = min(len(items), start_idx + visible_items)
+            
+            # Keep track of display row
+            current_row = row
             
             # Draw items
             for i in range(start_idx, end_idx):
@@ -1708,19 +1721,20 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                     # Current cursor position gets highlighted
                     if is_selected:
                         try:
-                            stdscr.addstr(row + i - start_idx, 0, f"> {display_str}", curses.A_REVERSE | curses.A_BOLD)
+                            stdscr.addstr(current_row, 0, f"> {display_str}", curses.A_REVERSE | curses.A_BOLD)
                         except:
                             # Fallback if attribute combination fails
-                            stdscr.addstr(row + i - start_idx, 0, f"> {display_str}", curses.A_REVERSE)
+                            stdscr.addstr(current_row, 0, f"> {display_str}", curses.A_REVERSE)
                     else:
-                        stdscr.addstr(row + i - start_idx, 0, f"> {display_str}", curses.A_REVERSE)
+                        stdscr.addstr(current_row, 0, f"> {display_str}", curses.A_REVERSE)
                         
                     # If this is the expanded item and not a directory, show its summary
                     if expanded_info and expanded_info[0] == i and not is_dir:
-                        summary_row = row + i - start_idx + 1
+                        # Move to next row for dropdown
+                        current_row += 1
                         
                         # Check if we have enough room to display summary
-                        available_rows = min(5, height - summary_row - 3)  # Leave some space for footer
+                        available_rows = min(6, height - current_row - 3)  # Leave some space for footer
                         
                         if available_rows > 0:
                             # Draw summary box
@@ -1728,70 +1742,77 @@ def _curses_file_browser(in_db=False, shortcuts=None):
                             summary_width = min(width - 4, 80)
                             
                             # Draw top border
-                            if summary_row < height:
+                            if current_row < height:
                                 try:
-                                    stdscr.addstr(summary_row, 2, "┌" + "─" * (summary_width - 2) + "┐", curses.A_NORMAL)
+                                    stdscr.addstr(current_row, 2, "┌" + "─" * (summary_width - 2) + "┐", curses.A_NORMAL)
                                 except:
                                     pass  # Skip if can't draw
                             
-                            summary_row += 1
+                            current_row += 1
                             rows_used = 1
                             
                             # Draw summary content
-                            if summary and summary_row < height and rows_used < available_rows:
+                            if summary and current_row < height and rows_used < available_rows:
                                 # Wrap summary text to fit box
                                 wrapped_summary = textwrap.wrap(summary, summary_width - 4)
                                 if wrapped_summary:
                                     try:
-                                        stdscr.addstr(summary_row, 2, "│ " + wrapped_summary[0][:summary_width-6] + 
-                                                    " " * (summary_width - len(wrapped_summary[0]) - 6) + " │", curses.A_NORMAL)
+                                        summary_text = wrapped_summary[0][:summary_width-6]
+                                        padding = " " * (summary_width - len(summary_text) - 6)
+                                        stdscr.addstr(current_row, 2, "│ " + summary_text + padding + " │", curses.A_NORMAL)
                                     except:
                                         pass
-                                    summary_row += 1
+                                    current_row += 1
                                     rows_used += 1
                             
                             # Draw tags
-                            if tags and summary_row < height and rows_used < available_rows:
+                            if tags and current_row < height and rows_used < available_rows:
                                 tags_str = "Tags: " + ", ".join(tags[:5])
                                 if len(tags) > 5:
                                     tags_str += "..."
                                 if len(tags_str) > summary_width - 6:
                                     tags_str = tags_str[:summary_width-9] + "..."
                                 try:
-                                    stdscr.addstr(summary_row, 2, "│ " + tags_str + 
-                                                " " * (summary_width - len(tags_str) - 6) + " │", curses.A_NORMAL)
+                                    padding = " " * (summary_width - len(tags_str) - 6)
+                                    stdscr.addstr(current_row, 2, "│ " + tags_str + padding + " │", curses.A_NORMAL)
                                 except:
                                     pass
-                                summary_row += 1
+                                current_row += 1
                                 rows_used += 1
                             
                             # Draw preview
-                            if preview and summary_row < height and rows_used < available_rows:
+                            if preview and current_row < height and rows_used < available_rows:
                                 preview_line = preview.split('\n')[0][:summary_width-12] + "..."
                                 try:
-                                    stdscr.addstr(summary_row, 2, "│ " + preview_line + 
-                                                " " * (summary_width - len(preview_line) - 6) + " │", curses.A_NORMAL)
+                                    padding = " " * (summary_width - len(preview_line) - 6)
+                                    stdscr.addstr(current_row, 2, "│ " + preview_line + padding + " │", curses.A_NORMAL)
                                 except:
                                     pass
-                                summary_row += 1
+                                current_row += 1
                                 rows_used += 1
                             
                             # Draw bottom border
-                            if summary_row < height:
+                            if current_row < height:
                                 try:
-                                    stdscr.addstr(summary_row, 2, "└" + "─" * (summary_width - 2) + "┘", curses.A_NORMAL)
+                                    stdscr.addstr(current_row, 2, "└" + "─" * (summary_width - 2) + "┘", curses.A_NORMAL)
                                 except:
                                     pass
-                                summary_row += 1
+                                current_row += 1
+                                
+                            # Add extra space after dropdown
+                            current_row += 1
                 else:
                     # Normal items
                     if is_selected:
                         try:
-                            stdscr.addstr(row + i - start_idx, 0, f"  {display_str}", curses.A_BOLD)
+                            stdscr.addstr(current_row, 0, f"  {display_str}", curses.A_BOLD)
                         except:
-                            stdscr.addstr(row + i - start_idx, 0, f"  {display_str}", curses.A_NORMAL)
+                            stdscr.addstr(current_row, 0, f"  {display_str}", curses.A_NORMAL)
                     else:
-                        stdscr.addstr(row + i - start_idx, 0, f"  {display_str}", curses.A_NORMAL)
+                        stdscr.addstr(current_row, 0, f"  {display_str}", curses.A_NORMAL)
+                
+                # Move to next row for next item
+                current_row += 1
             
             # Draw footer
             footer_y = height - 3
