@@ -1,14 +1,27 @@
-from flask import Blueprint, jsonify, request
-from typing import Dict, List, Optional, Union
-from http import HTTPStatus
-
-from .models import ModelName
-from .schemas import model_schema, models_schema
-from .services import ModelService
 from .exceptions import ResourceNotFoundError
+from .models import ModelName
+from .schemas import (
+    model_schema,
+    models_schema,
+)
+from .services import ModelService
+from flask import (
+    Blueprint,
+    jsonify,
+    request,
+)
+from http import HTTPStatus
+from typing import (
+    Dict,
+    List,
+    Optional,
+    Union,
+)
+
 
 # Create a blueprint for this resource
 blueprint = Blueprint("resource_name", __name__, url_prefix="/api/resource")
+
 
 @blueprint.route("/", methods=["GET"])
 def get_all_resources():
@@ -87,7 +100,7 @@ def create_resource():
         data = request.get_json()
         if not data or "name" not in data:
             return jsonify({"error": "Name is required"}), HTTPStatus.BAD_REQUEST
-        
+
         resource = ModelService.create(data)
         return jsonify(model_schema.dump(resource)), HTTPStatus.CREATED
     except ValueError as e:
@@ -163,4 +176,4 @@ def delete_resource(resource_id: int):
     except ResourceNotFoundError:
         return jsonify({"error": "Resource not found"}), HTTPStatus.NOT_FOUND
     except Exception as e:
-        return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR 
+        return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
